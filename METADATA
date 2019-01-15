@@ -1,0 +1,14 @@
+name: "kmod"
+description: "Linux kernel module handling."
+third_party {
+  url {
+    type: GIT
+    value: "https://git.kernel.org/pub/scm/utils/kernel/kmod/kmod.git"
+  }
+  version: "v25"
+  last_upgrade_date {
+    year: 2018
+    month: 10
+    day: 29
+  }
+}
