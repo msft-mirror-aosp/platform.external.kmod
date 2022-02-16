@@ -57,7 +57,7 @@ cc_defaults {
         "-UNDEBUG",
     ],
     target: {
-        glibc: {
+        linux_glibc: {
             cflags: ["-DHAVE_DECL_STRNDUPA"]
         }
     }
