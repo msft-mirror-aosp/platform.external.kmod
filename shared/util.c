@@ -46,9 +46,6 @@ static const struct kmod_ext {
 #ifdef ENABLE_XZ
 	{".ko.xz", sizeof(".ko.xz") - 1},
 #endif
-#ifdef ENABLE_ZSTD
-	{".ko.zst", sizeof(".ko.zst") - 1},
-#endif
 	{ }
 };
 

@@ -19,7 +19,6 @@ BuildPackages =
 	make
 	pkgconf-pkg-config
 	xml-common
-	libzstd-devel
 	xz-devel
 	zlib-devel
 	openssl-devel

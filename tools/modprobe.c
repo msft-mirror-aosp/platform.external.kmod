@@ -353,9 +353,7 @@ static int rmmod_do_remove_module(struct kmod_module *mod)
 	return err;
 }
 
-#define RMMOD_FLAG_DO_DEPENDENCIES	0x1
-#define RMMOD_FLAG_IGNORE_BUILTIN	0x2
-static int rmmod_do_module(struct kmod_module *mod, int flags);
+static int rmmod_do_module(struct kmod_module *mod, bool do_dependencies);
 
 static int rmmod_do_deps_list(struct kmod_list *list, bool stop_on_errors)
 {
@@ -363,7 +361,7 @@ static int rmmod_do_deps_list(struct kmod_list *list, bool stop_on_errors)
 
 	kmod_list_foreach_reverse(l, list) {
 		struct kmod_module *m = kmod_module_get_module(l);
-		int r = rmmod_do_module(m, RMMOD_FLAG_IGNORE_BUILTIN);
+		int r = rmmod_do_module(m, false);
 		kmod_module_unref(m);
 
 		if (r < 0 && stop_on_errors)
@@ -373,7 +371,7 @@ static int rmmod_do_deps_list(struct kmod_list *list, bool stop_on_errors)
 	return 0;
 }
 
-static int rmmod_do_module(struct kmod_module *mod, int flags)
+static int rmmod_do_module(struct kmod_module *mod, bool do_dependencies)
 {
 	const char *modname = kmod_module_get_name(mod);
 	struct kmod_list *pre = NULL, *post = NULL;
@@ -403,19 +401,15 @@ static int rmmod_do_module(struct kmod_module *mod, int flags)
 			}
 			goto error;
 		} else if (state == KMOD_MODULE_BUILTIN) {
-			if (flags & RMMOD_FLAG_IGNORE_BUILTIN) {
-				err = 0;
-			} else {
-				LOG("Module %s is builtin.\n", modname);
-				err = -ENOENT;
-			}
+			LOG("Module %s is builtin.\n", modname);
+			err = -ENOENT;
 			goto error;
 		}
 	}
 
 	rmmod_do_deps_list(post, false);
 
-	if ((flags & RMMOD_FLAG_DO_DEPENDENCIES) && remove_dependencies) {
+	if (do_dependencies && remove_dependencies) {
 		struct kmod_list *deps = kmod_module_get_dependencies(mod);
 
 		err = rmmod_do_deps_list(deps, true);
@@ -468,7 +462,7 @@ static int rmmod(struct kmod_ctx *ctx, const char *alias)
 
 	kmod_list_foreach(l, list) {
 		struct kmod_module *mod = kmod_module_get_module(l);
-		err = rmmod_do_module(mod, RMMOD_FLAG_DO_DEPENDENCIES);
+		err = rmmod_do_module(mod, true);
 		kmod_module_unref(mod);
 		if (err < 0)
 			break;
