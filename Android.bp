@@ -42,6 +42,7 @@ cc_defaults {
     name: "libkmod_cflags_common",
     local_include_dirs: ["port-gnu"],
     cflags: [
+        "-include android/port.h",
         "-include config.h",
         "-ffunction-sections",
         "-fdata-sections",
@@ -84,7 +85,10 @@ cc_library_static {
         "shared/hash.c",
         "shared/strbuf.c",
     ],
-    visibility: ["//external/igt-gpu-tools"],
+    visibility: [
+        "//external/igt-gpu-tools",
+        "//external/pciutils",
+    ],
 }
 
 cc_binary_host {
