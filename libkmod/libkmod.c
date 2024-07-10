@@ -50,7 +50,7 @@
  * and is passed to all library operations.
  */
 
-static struct _index_files {
+static const struct {
 	const char *fn;
 	const char *prefix;
 } index_files[] = {
@@ -61,10 +61,11 @@ static struct _index_files {
 	[KMOD_INDEX_MODULES_BUILTIN] = { .fn = "modules.builtin", .prefix = ""},
 };
 
-static const char *default_config_paths[] = {
+static const char *const default_config_paths[] = {
 	SYSCONFDIR "/modprobe.d",
 	"/run/modprobe.d",
 	"/usr/local/lib/modprobe.d",
+	DISTCONFDIR "/modprobe.d",
 	"/lib/modprobe.d",
 	NULL
 };
@@ -83,6 +84,7 @@ struct kmod_ctx {
 	void *log_data;
 	const void *userdata;
 	char *dirname;
+	enum kmod_file_compression_type kernel_compression;
 	struct kmod_config *config;
 	struct hash *modules_by_name;
 	struct index_mm *indexes[_KMOD_INDEX_MODULES_SIZE];
@@ -208,7 +210,7 @@ static int log_priority(const char *priority)
 	return 0;
 }
 
-static const char *dirname_default_prefix = "/lib/modules";
+static const char *dirname_default_prefix = MODULE_DIRECTORY;
 
 static char *get_kernel_release(const char *dirname)
 {
@@ -227,19 +229,53 @@ static char *get_kernel_release(const char *dirname)
 	return p;
 }
 
+static enum kmod_file_compression_type get_kernel_compression(struct kmod_ctx *ctx)
+{
+	const char *path = "/sys/module/compression";
+	char buf[16];
+	int fd;
+	int err;
+
+	fd = open(path, O_RDONLY|O_CLOEXEC);
+	if (fd < 0) {
+		/* Not having the file is not an error: kernel may be too old */
+		DBG(ctx, "could not open '%s' for reading: %m\n", path);
+		return KMOD_FILE_COMPRESSION_NONE;
+	}
+
+	err = read_str_safe(fd, buf, sizeof(buf));
+	close(fd);
+	if (err < 0) {
+		ERR(ctx, "could not read from '%s': %s\n",
+		    path, strerror(-err));
+		return KMOD_FILE_COMPRESSION_NONE;
+	}
+
+	if (streq(buf, "zstd\n"))
+		return KMOD_FILE_COMPRESSION_ZSTD;
+	else if (streq(buf, "xz\n"))
+		return KMOD_FILE_COMPRESSION_XZ;
+	else if (streq(buf, "gzip\n"))
+		return KMOD_FILE_COMPRESSION_ZLIB;
+
+	ERR(ctx, "unknown kernel compression %s", buf);
+
+	return KMOD_FILE_COMPRESSION_NONE;
+}
+
 /**
  * kmod_new:
  * @dirname: what to consider as linux module's directory, if NULL
- *           defaults to /lib/modules/`uname -r`. If it's relative,
+ *           defaults to $MODULE_DIRECTORY/`uname -r`. If it's relative,
  *           it's treated as relative to the current working directory.
  *           Otherwise, give an absolute dirname.
  * @config_paths: ordered array of paths (directories or files) where
  *                to load from user-defined configuration parameters such as
  *                alias, blacklists, commands (install, remove). If NULL
  *                defaults to /etc/modprobe.d, /run/modprobe.d,
- *                /usr/local/lib/modprobe.d and /lib/modprobe.d. Give an empty
- *                vector if configuration should not be read. This array must
- *                be null terminated.
+ *                /usr/local/lib/modprobe.d, DISTCONFDIR/modprobe.d, and
+ *                /lib/modprobe.d. Give an empty vector if configuration should
+ *                not be read. This array must be null terminated.
  *
  * Create kmod library context. This reads the kmod configuration
  * and fills in the default values.
@@ -271,6 +307,8 @@ KMOD_EXPORT struct kmod_ctx *kmod_new(const char *dirname,
 	env = secure_getenv("KMOD_LOG");
 	if (env != NULL)
 		kmod_set_log_priority(ctx, log_priority(env));
+
+	ctx->kernel_compression = get_kernel_compression(ctx);
 
 	if (config_paths == NULL)
 		config_paths = default_config_paths;
@@ -978,4 +1016,9 @@ KMOD_EXPORT int kmod_dump_index(struct kmod_ctx *ctx, enum kmod_index type,
 const struct kmod_config *kmod_get_config(const struct kmod_ctx *ctx)
 {
 	return ctx->config;
+}
+
+enum kmod_file_compression_type kmod_get_kernel_compression(const struct kmod_ctx *ctx)
+{
+	return ctx->kernel_compression;
 }
