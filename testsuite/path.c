@@ -15,6 +15,10 @@
  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
  */
 
+/* We unset _FILE_OFFSET_BITS here so we can override both stat and stat64 on
+ * 32-bit architectures and forward each to the right libc function */
+#undef _FILE_OFFSET_BITS
+
 #include <assert.h>
 #include <dirent.h>
 #include <dlfcn.h>
@@ -159,8 +163,15 @@ TS_EXPORT int open ## suffix (const char *path, int flags, ...)	\
 	return _fn(p, flags);					\
 }
 
-/* wrapper template for __xstat family */
+/*
+ * wrapper template for __xstat family
+ * This family got deprecated/dropped in glibc 2.32.9000, but we still need
+ * to keep it for a while for programs that were built against previous versions
+ */
 #define WRAP_VERSTAT(prefix, suffix)			    \
+TS_EXPORT int prefix ## stat ## suffix (int ver,	    \
+			      const char *path,		    \
+	                      struct stat ## suffix *st);   \
 TS_EXPORT int prefix ## stat ## suffix (int ver,	    \
 			      const char *path,		    \
 	                      struct stat ## suffix *st)    \
@@ -181,25 +192,23 @@ TS_EXPORT int prefix ## stat ## suffix (int ver,	    \
 }
 
 WRAP_1ARG(DIR*, NULL, opendir);
+WRAP_1ARG(int, -1, chdir);
 
 WRAP_2ARGS(FILE*, NULL, fopen, const char*);
+WRAP_2ARGS(FILE*, NULL, fopen64, const char*);
 WRAP_2ARGS(int, -1, mkdir, mode_t);
 WRAP_2ARGS(int, -1, access, int);
 WRAP_2ARGS(int, -1, stat, struct stat*);
 WRAP_2ARGS(int, -1, lstat, struct stat*);
-#ifndef _FILE_OFFSET_BITS
 WRAP_2ARGS(int, -1, stat64, struct stat64*);
 WRAP_2ARGS(int, -1, lstat64, struct stat64*);
 WRAP_OPEN(64);
-#endif
 
 WRAP_OPEN();
 
 #ifdef HAVE___XSTAT
 WRAP_VERSTAT(__x,);
 WRAP_VERSTAT(__lx,);
-#ifndef _FILE_OFFSET_BITS
 WRAP_VERSTAT(__x,64);
 WRAP_VERSTAT(__lx,64);
-#endif
 #endif

@@ -1,6 +1,7 @@
 *.o
 *.gcda
 *.gcno
+*.pc
 /*.tar.xz
 /*.md5sum
 /*.mbx
@@ -13,8 +14,6 @@
 /aclocal.m4
 /autom4te.cache/
 /build-aux/
-/config.h
-/config.h.in
 /config.log
 /config.status
 /configure

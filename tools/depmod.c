@@ -50,19 +50,21 @@ static int verbose = DEFAULT_VERBOSE;
 
 static const char CFG_BUILTIN_KEY[] = "built-in";
 static const char CFG_EXTERNAL_KEY[] = "external";
-static const char *default_cfg_paths[] = {
+static const char *const default_cfg_paths[] = {
 	SYSCONFDIR "/depmod.d",
 	"/run/depmod.d",
 	"/usr/local/lib/depmod.d",
+	DISTCONFDIR "/depmod.d",
 	"/lib/depmod.d",
 	NULL
 };
 
-static const char cmdopts_s[] = "aAb:C:E:F:euqrvnP:wmVh";
+static const char cmdopts_s[] = "aAb:o:C:E:F:euqrvnP:wmVh";
 static const struct option cmdopts[] = {
 	{ "all", no_argument, 0, 'a' },
 	{ "quick", no_argument, 0, 'A' },
 	{ "basedir", required_argument, 0, 'b' },
+	{ "outdir", required_argument, 0, 'o' },
 	{ "config", required_argument, 0, 'C' },
 	{ "symvers", required_argument, 0, 'E' },
 	{ "filesyms", required_argument, 0, 'F' },
@@ -104,6 +106,7 @@ static void help(void)
 		"\n"
 		"The following options are useful for people managing distributions:\n"
 		"\t-b, --basedir=DIR    Use an image of a module tree.\n"
+		"\t-o, --outdir=DIR     Output directory for generated files.\n"
 		"\t-F, --filesyms=FILE  Use the file instead of the\n"
 		"\t                     current kernel symbols.\n"
 		"\t-E, --symvers=FILE   Use Module.symvers file to check\n"
@@ -187,7 +190,7 @@ static struct index_node *index_create(void)
 {
 	struct index_node *node;
 
-	node = NOFAIL(calloc(sizeof(struct index_node), 1));
+	node = NOFAIL(calloc(1, sizeof(struct index_node)));
 	node->prefix = NOFAIL(strdup(""));
 	node->first = INDEX_CHILDMAX;
 
@@ -250,7 +253,7 @@ static int index_add_value(struct index_value **values,
 		values = &(*values)->next;
 
 	len = strlen(value);
-	v = NOFAIL(calloc(sizeof(struct index_value) + len + 1, 1));
+	v = NOFAIL(calloc(1, sizeof(struct index_value) + len + 1));
 	v->next = *values;
 	v->priority = priority;
 	memcpy(v->value, value, len + 1);
@@ -281,7 +284,7 @@ static int index_insert(struct index_node *node, const char *key,
 				struct index_node *n;
 
 				/* New child is copy of node with prefix[j+1..N] */
-				n = NOFAIL(calloc(sizeof(struct index_node), 1));
+				n = NOFAIL(calloc(1, sizeof(struct index_node)));
 				memcpy(n, node, sizeof(struct index_node));
 				n->prefix = NOFAIL(strdup(&prefix[j+1]));
 
@@ -310,7 +313,7 @@ static int index_insert(struct index_node *node, const char *key,
 				node->first = ch;
 			if (ch > node->last)
 				node->last = ch;
-			node->children[ch] = NOFAIL(calloc(sizeof(struct index_node), 1));
+			node->children[ch] = NOFAIL(calloc(1, sizeof(struct index_node)));
 
 			child = node->children[ch];
 			child->prefix = NOFAIL(strdup(&key[i+1]));
@@ -467,6 +470,8 @@ struct cfg {
 	const char *kversion;
 	char dirname[PATH_MAX];
 	size_t dirnamelen;
+	char outdirname[PATH_MAX];
+	size_t outdirnamelen;
 	char sym_prefix;
 	uint8_t check_symvers;
 	uint8_t print_unknown;
@@ -906,7 +911,7 @@ struct vertex;
 struct mod {
 	struct kmod_module *kmod;
 	char *path;
-	const char *relpath; /* path relative to '$ROOT/lib/modules/$VER/' */
+	const char *relpath; /* path relative to '$ROOT$MODULE_DIRECTORY/$VER/' */
 	char *uncrelpath; /* same as relpath but ending in .ko */
 	struct kmod_list *info_list;
 	struct kmod_list *dep_sym_list;
@@ -1582,7 +1587,7 @@ static int depmod_load_modules(struct depmod *depmod)
 		struct kmod_list *l, *list = NULL;
 		int err = kmod_module_get_symbols(mod->kmod, &list);
 		if (err < 0) {
-			if (err == -ENOENT)
+			if (err == -ENODATA)
 				DBG("ignoring %s: no symbols\n", mod->path);
 			else
 				ERR("failed to load symbols from %s: %s\n",
@@ -2576,7 +2581,7 @@ static int depmod_output(struct depmod *depmod, FILE *out)
 		{ "modules.devname", output_devname },
 		{ }
 	};
-	const char *dname = depmod->cfg->dirname;
+	const char *dname = depmod->cfg->outdirname;
 	int dfd, err = 0;
 	struct timeval tv;
 
@@ -2585,6 +2590,11 @@ static int depmod_output(struct depmod *depmod, FILE *out)
 	if (out != NULL)
 		dfd = -1;
 	else {
+		err = mkdir_p(dname, strlen(dname), 0755);
+		if (err < 0) {
+			CRIT("could not create directory %s: %m\n", dname);
+			return err;
+		}
 		dfd = open(dname, O_RDONLY);
 		if (dfd < 0) {
 			err = -errno;
@@ -2898,6 +2908,7 @@ static int do_depmod(int argc, char *argv[])
 	FILE *out = NULL;
 	int err = 0, all = 0, maybe_all = 0, n_config_paths = 0;
 	_cleanup_free_ char *root = NULL;
+	_cleanup_free_ char *out_root = NULL;
 	_cleanup_free_ const char **config_paths = NULL;
 	const char *system_map = NULL;
 	const char *module_symvers = NULL;
@@ -2926,6 +2937,11 @@ static int do_depmod(int argc, char *argv[])
 			if (root)
 				free(root);
 			root = path_make_absolute_cwd(optarg);
+			break;
+		case 'o':
+			if (out_root)
+				free(out_root);
+			out_root = path_make_absolute_cwd(optarg);
 			break;
 		case 'C': {
 			size_t bytes = sizeof(char *) * (n_config_paths + 2);
@@ -3008,8 +3024,12 @@ static int do_depmod(int argc, char *argv[])
 	}
 
 	cfg.dirnamelen = snprintf(cfg.dirname, PATH_MAX,
-				  "%s/lib/modules/%s",
-				  root == NULL ? "" : root, cfg.kversion);
+				  "%s" MODULE_DIRECTORY "/%s",
+				  root ?: "", cfg.kversion);
+
+	cfg.outdirnamelen = snprintf(cfg.outdirname, PATH_MAX,
+				     "%s" MODULE_DIRECTORY "/%s",
+				     out_root ?: (root ?: ""), cfg.kversion);
 
 	if (optind == argc)
 		all = 1;

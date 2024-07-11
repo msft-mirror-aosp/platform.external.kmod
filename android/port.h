@@ -26,6 +26,30 @@
  * SUCH DAMAGE.
  */
 
+#define _GNU_SOURCE
+
+#include <endian.h>
+
+#if defined(__APPLE__)
+
+#include <endian-darwin.h>
+#define HAVE_DECL_STRNDUPA
+#define strndupa(_s,_l)        strdup(_s)
+char* basename(const char*);
+#define init_module     darwin_init_module
+#define delete_module   darwin_delete_module
+#define program_invocation_short_name "depmod"
+
+#endif
+
+#if defined(__ANDROID__) || defined(__APPLE__)
+#include <stdlib.h>
+#include <unistd.h>
+static inline char *get_current_dir_name(void) {
+    return getcwd(malloc(PATH_MAX), PATH_MAX);
+}
+#endif
+
 #if defined(ANDROID_HOST_MUSL)
 
 // musl string.h doesn't have basename. libgen.h's basename is
