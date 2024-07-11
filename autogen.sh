@@ -25,7 +25,6 @@ fi
 
 if [ ! -L /bin ]; then
     args="$args \
-        --with-rootprefix= \
         --with-rootlibdir=$(libdir /lib) \
         "
 fi
@@ -34,7 +33,6 @@ cd $oldpwd
 
 hackargs="\
 --enable-debug \
---enable-python \
 --with-zstd \
 --with-xz \
 --with-zlib \
