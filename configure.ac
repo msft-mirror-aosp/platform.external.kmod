@@ -1,6 +1,6 @@
 AC_PREREQ(2.64)
 AC_INIT([kmod],
-	[30],
+	[32],
 	[linux-modules@vger.kernel.org],
 	[kmod],
 	[http://git.kernel.org/?p=utils/kernel/kmod/kmod.git])
@@ -21,6 +21,9 @@ LT_INIT([disable-static pic-only])
 AS_IF([test "x$enable_static" = "xyes"], [AC_MSG_ERROR([--enable-static is not supported by kmod])])
 AS_IF([test "x$enable_largefile" = "xno"], [AC_MSG_ERROR([--disable-largefile is not supported by kmod])])
 
+module_compressions=""
+module_signatures="legacy"
+
 #####################################################################
 # Program checks and configurations
 #####################################################################
@@ -30,7 +33,6 @@ AC_PROG_MKDIR_P
 AC_PROG_LN_S
 PKG_PROG_PKG_CONFIG
 AC_PATH_PROG([XSLTPROC], [xsltproc])
-AC_PATH_PROG([MKOSI], [mkosi])
 
 AC_PROG_CC_C99
 
@@ -68,7 +70,8 @@ AC_COMPILE_IFELSE(
 
 AC_MSG_CHECKING([whether _Noreturn is supported])
 AC_COMPILE_IFELSE(
-	[AC_LANG_SOURCE([[_Noreturn int foo(void) { exit(0); }]])],
+	[AC_LANG_SOURCE([[#include <stdlib.h>
+	_Noreturn int foo(void) { exit(0); }]])],
         [AC_DEFINE([HAVE_NORETURN], [1], [Define if _Noreturn is available])
 	 AC_MSG_RESULT([yes])],
 	[AC_MSG_RESULT([no])])
@@ -78,17 +81,45 @@ AC_COMPILE_IFELSE(
 # --with-
 #####################################################################
 
+AC_ARG_WITH([distconfdir], AS_HELP_STRING([--with-distconfdir=DIR], [directory to search for distribution configuration files]),
+        [], [with_distconfdir='${prefix}/lib'])
+AC_SUBST([distconfdir], [$with_distconfdir])
+
 AC_ARG_WITH([rootlibdir],
         AS_HELP_STRING([--with-rootlibdir=DIR], [rootfs directory to install shared libraries]),
         [], [with_rootlibdir=$libdir])
 AC_SUBST([rootlibdir], [$with_rootlibdir])
 
+# Ideally this would be $prefix/lib/modules but default to /lib/modules for compatibility with earlier versions
+AC_ARG_WITH([module_directory],
+        AS_HELP_STRING([--with-module-directory=DIR], [directory in which to look for kernel modules @<:@default=/lib/modules@:>@]),
+        [], [with_module_directory=/lib/modules])
+AC_SUBST([module_directory], [$with_module_directory])
+
+# Check all directory arguments for consistency.
+for ac_var in	distconfdir rootlibdir module_directory
+do
+  eval ac_val=\$$ac_var
+  # Remove trailing slashes.
+  case $ac_val in
+    */ )
+      ac_val=`expr "X$ac_val" : 'X\(.*@<:@^/@:>@\)' \| "X$ac_val" : 'X\(.*\)'`
+      eval $ac_var=\$ac_val;;
+  esac
+  # Be sure to have absolute directory names.
+  case $ac_val in
+    @<:@\\/$@:>@* | ?:@<:@\\/@:>@* )  continue;;
+  esac
+  as_fn_error $? "expected an absolute directory name for --$ac_var: $ac_val"
+done
+
 AC_ARG_WITH([zstd],
 	AS_HELP_STRING([--with-zstd], [handle Zstandard-compressed modules @<:@default=disabled@:>@]),
 	[], [with_zstd=no])
 AS_IF([test "x$with_zstd" != "xno"], [
-	PKG_CHECK_MODULES([libzstd], [libzstd >= 1.4.4])
+	PKG_CHECK_MODULES([libzstd], [libzstd >= 1.4.4], [LIBS="$LIBS $libzstd_LIBS"])
 	AC_DEFINE([ENABLE_ZSTD], [1], [Enable Zstandard for modules.])
+	module_compressions="zstd $module_compressions"
 ], [
 	AC_MSG_NOTICE([Zstandard support not requested])
 ])
@@ -98,8 +129,9 @@ AC_ARG_WITH([xz],
 	AS_HELP_STRING([--with-xz], [handle Xz-compressed modules @<:@default=disabled@:>@]),
 	[], [with_xz=no])
 AS_IF([test "x$with_xz" != "xno"], [
-	PKG_CHECK_MODULES([liblzma], [liblzma >= 4.99])
+	PKG_CHECK_MODULES([liblzma], [liblzma >= 4.99], [LIBS="$LIBS $liblzma_LIBS"])
 	AC_DEFINE([ENABLE_XZ], [1], [Enable Xz for modules.])
+	module_compressions="xz $module_compressions"
 ], [
 	AC_MSG_NOTICE([Xz support not requested])
 ])
@@ -109,8 +141,9 @@ AC_ARG_WITH([zlib],
 	AS_HELP_STRING([--with-zlib], [handle gzipped modules @<:@default=disabled@:>@]),
 	[], [with_zlib=no])
 AS_IF([test "x$with_zlib" != "xno"], [
-	PKG_CHECK_MODULES([zlib], [zlib])
+	PKG_CHECK_MODULES([zlib], [zlib], [LIBS="$LIBS $zlib_LIBS"])
 	AC_DEFINE([ENABLE_ZLIB], [1], [Enable zlib for modules.])
+	module_compressions="gzip $module_compressions"
 ], [
 	AC_MSG_NOTICE([zlib support not requested])
 ])
@@ -120,8 +153,9 @@ AC_ARG_WITH([openssl],
 	AS_HELP_STRING([--with-openssl], [handle PKCS7 signatures @<:@default=disabled@:>@]),
 	[], [with_openssl=no])
 AS_IF([test "x$with_openssl" != "xno"], [
-	PKG_CHECK_MODULES([libcrypto], [libcrypto >= 1.1.0])
+	PKG_CHECK_MODULES([libcrypto], [libcrypto >= 1.1.0], [LIBS="$LIBS $libcrypto_LIBS"])
 	AC_DEFINE([ENABLE_OPENSSL], [1], [Enable openssl for modinfo.])
+	module_signatures="PKCS7 $module_signatures"
 ], [
 	AC_MSG_NOTICE([openssl support not requested])
 ])
@@ -140,15 +174,6 @@ AC_SUBST([bashcompletiondir], [$with_bashcompletiondir])
 #####################################################################
 # --enable-
 #####################################################################
-
-AC_ARG_ENABLE([experimental],
-        AS_HELP_STRING([--enable-experimental], [enable experimental tools and features. Do not enable it unless you know what you are doing. @<:@default=disabled@:>@]),
-        [], enable_experimental=no)
-AM_CONDITIONAL([BUILD_EXPERIMENTAL], [test "x$enable_experimental" = "xyes"])
-AS_IF([test "x$enable_experimental" = "xyes"], [
-	AC_DEFINE(ENABLE_EXPERIMENTAL, [1], [Experimental features.])
-])
-CC_FEATURE_APPEND([with_features], [enable_experimental], [EXPERIMENTAL])
 
 AC_ARG_ENABLE([tools],
         AS_HELP_STRING([--disable-tools], [disable building tools that provide same functionality as module-init-tools @<:@default=enabled@:>@]),
@@ -179,24 +204,6 @@ AS_IF([test "x$enable_debug" = "xyes"], [
 	AC_DEFINE(ENABLE_DEBUG, [1], [Debug messages.])
 ])
 
-AC_ARG_ENABLE([python],
-	AS_HELP_STRING([--enable-python], [enable Python libkmod bindings @<:@default=disabled@:>@]),
-	[], [enable_python=no])
-AS_IF([test "x$enable_python" = "xyes"], [
-	AM_PATH_PYTHON(,,[:])
-	AC_PATH_PROG([CYTHON], [cython], [:])
-
-	PKG_CHECK_MODULES([PYTHON], [python-${PYTHON_VERSION}],
-			  [have_python=yes],
-			  [PKG_CHECK_MODULES([PYTHON], [python],
-					     [have_python=yes],
-					     [have_python=no])])
-
-	AS_IF([test "x$have_python" = xno],
-	      [AC_MSG_ERROR([*** python support requested but libraries not found])])
-])
-AM_CONDITIONAL([BUILD_PYTHON], [test "x$enable_python" = "xyes"])
-
 AC_ARG_ENABLE([coverage],
 	AS_HELP_STRING([--enable-coverage], [enable test coverage @<:@default=disabled@:>@]),
 	[], [enable_coverage=no])
@@ -223,9 +230,6 @@ m4_ifdef([GTK_DOC_CHECK], [
 GTK_DOC_CHECK([1.14],[--flavour no-tmpl-flat])
 ], [
 AM_CONDITIONAL([ENABLE_GTK_DOC], false)])
-
-# Some tests are skipped when sysconfdir != /etc.
-AM_CONDITIONAL([KMOD_SYSCONFDIR_NOT_ETC], [test "x$sysconfdir" != "x/etc"])
 
 #####################################################################
 # Default CFLAGS and LDFLAGS
@@ -289,11 +293,16 @@ AC_DEFINE_UNQUOTED(KMOD_FEATURES, ["$with_features"], [Features in this build])
 # Generate files from *.in
 #####################################################################
 
+AC_SUBST([module_compressions], $module_compressions)
+AC_SUBST([module_signatures], $module_signatures)
+
 AC_CONFIG_FILES([
 	Makefile
 	man/Makefile
 	libkmod/docs/Makefile
 	libkmod/docs/version.xml
+	libkmod/libkmod.pc
+	tools/kmod.pc
 ])
 
 
@@ -304,8 +313,10 @@ AC_MSG_RESULT([
 	$PACKAGE $VERSION
 	=======
 
+	module_directory:	${module_directory}
 	prefix:			${prefix}
 	sysconfdir:		${sysconfdir}
+	distconfdir:		${distconfdir}
 	libdir:			${libdir}
 	rootlibdir:		${rootlibdir}
 	includedir:		${includedir}
@@ -316,9 +327,7 @@ AC_MSG_RESULT([
 	cflags:			${with_cflags} ${CFLAGS}
 	ldflags:		${with_ldflags} ${LDFLAGS}
 
-	experimental features:  ${enable_experimental}
 	tools:			${enable_tools}
-	python bindings:	${enable_python}
 	logging:		${enable_logging}
 	compression:		zstd=${with_zstd}  xz=${with_xz}  zlib=${with_zlib}
 	debug:			${enable_debug}
