@@ -15,6 +15,10 @@
 # define MODULE_INIT_IGNORE_VERMAGIC 2
 #endif
 
+#ifndef MODULE_INIT_COMPRESSED_FILE
+# define MODULE_INIT_COMPRESSED_FILE 4
+#endif
+
 #ifndef __NR_finit_module
 # define __NR_finit_module -1
 #endif
@@ -33,7 +37,7 @@ static inline int finit_module(int fd, const char *uargs, int flags)
 }
 #endif
 
-#if (!HAVE_DECL_STRNDUPA && !defined(__APPLE__))
+#if !HAVE_DECL_STRNDUPA
 #define strndupa(s, n)							\
 	({								\
 		const char *__old = (s);				\
