@@ -85,7 +85,10 @@ cc_library_static {
         "shared/hash.c",
         "shared/strbuf.c",
     ],
-    visibility: ["//external/igt-gpu-tools"],
+    visibility: [
+        "//external/igt-gpu-tools",
+        "//external/pciutils",
+    ],
 }
 
 cc_binary_host {
