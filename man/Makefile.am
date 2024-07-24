@@ -13,13 +13,26 @@ dist_man_MANS = $(MAN5) $(MAN8) $(MAN_STUB)
 modules.dep.bin.5: modules.dep.5
 endif
 
-EXTRA_DIST = $(MAN5:%.5=%.xml) $(MAN8:%.8=%.xml)
+EXTRA_DIST = $(MAN5:%.5=%.5.xml) $(MAN8:%.8=%.8.xml)
 CLEANFILES = $(dist_man_MANS)
 
-%.5 %.8: %.xml
-	$(AM_V_XSLT)$(XSLT) \
+define generate_manpage
+	$(AM_V_XSLT)if [ '$(distconfdir)' != '/lib' ] ; then \
+		sed -e 's|@DISTCONFDIR@|$(distconfdir)|g' $< ; \
+	else \
+		sed -e '/@DISTCONFDIR@/d' $< ; \
+	fi | \
+	sed -e 's|@MODULE_DIRECTORY@|$(module_directory)|g' | \
+	$(XSLT) \
 		-o $@ \
 		--nonet \
 		--stringparam man.output.quietly 1 \
 		--param funcsynopsis.style "'ansi'" \
-		http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl $<
+		http://docbook.sourceforge.net/release/xsl/current/manpages/docbook.xsl -
+endef
+
+%.5: %.5.xml
+	$(generate_manpage)
+
+%.8: %.8.xml
+	$(generate_manpage)
