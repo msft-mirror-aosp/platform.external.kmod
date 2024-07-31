@@ -40,27 +40,28 @@ license {
 
 cc_defaults {
     name: "libkmod_cflags_common",
-    local_include_dirs: ["port-gnu"],
     cflags: [
-        "-include config.h",
-        "-ffunction-sections",
-        "-fdata-sections",
+        "-include android/port.h",
         "-Wall",
         "-Werror",
         "-Wno-format",
         "-Wno-unused-parameter",
         "-Wno-unused-variable",
         "-Dsecure_getenv=getenv",
+
         "-DHAVE_CONFIG_H",
-        "-DANOTHER_BRICK_IN_THE",
+        "-include config.h",
+
+        "-DDISTCONFDIR=\"/lib\"",
+        "-DMODULE_DIRECTORY=\"/lib/modules\"",
         "-DSYSCONFDIR=\"/tmp\"",
         "-UNDEBUG",
     ],
     target: {
         glibc: {
-            cflags: ["-DHAVE_DECL_STRNDUPA"]
-        }
-    }
+            cflags: ["-DHAVE_DECL_STRNDUPA"],
+        },
+    },
 }
 
 cc_library_static {
@@ -84,7 +85,10 @@ cc_library_static {
         "shared/hash.c",
         "shared/strbuf.c",
     ],
-    visibility: ["//external/igt-gpu-tools"],
+    visibility: [
+        "//external/igt-gpu-tools",
+        "//external/pciutils",
+    ],
 }
 
 cc_binary_host {
@@ -96,13 +100,11 @@ cc_binary_host {
         "tools/kmod.c",
         "tools/modinfo.c",
         "tools/rmmod.c",
-        "tools/insert.c",
         "tools/log.c",
         "tools/modprobe.c",
         "tools/static-nodes.c",
         "tools/insmod.c",
         "tools/lsmod.c",
-        "tools/remove.c",
     ],
     static_libs: ["libkmod"],
 }
