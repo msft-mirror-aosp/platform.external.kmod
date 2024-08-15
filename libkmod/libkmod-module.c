@@ -551,7 +551,7 @@ KMOD_EXPORT int kmod_module_new_from_lookup(struct kmod_ctx *ctx,
 						const char *given_alias,
 						struct kmod_list **list)
 {
-	const lookup_func lookup[] = {
+	static const lookup_func lookup[] = {
 		kmod_lookup_alias_from_config,
 		kmod_lookup_alias_from_moddep_file,
 		kmod_lookup_alias_from_symbols_file,
@@ -619,7 +619,7 @@ KMOD_EXPORT int kmod_module_new_from_name_lookup(struct kmod_ctx *ctx,
 						 const char *modname,
 						 struct kmod_module **mod)
 {
-	const lookup_func lookup[] = {
+	static const lookup_func lookup[] = {
 		kmod_lookup_alias_from_moddep_file,
 		kmod_lookup_alias_from_builtin_file,
 		kmod_lookup_alias_from_kernel_builtin_file,
@@ -861,61 +861,49 @@ KMOD_EXPORT int kmod_module_remove_module(struct kmod_module *mod,
 
 extern long init_module(const void *mem, unsigned long len, const char *args);
 
-/**
- * kmod_module_insert_module:
- * @mod: kmod module
- * @flags: flags are not passed to Linux Kernel, but instead they dictate the
- * behavior of this function, valid flags are
- * KMOD_INSERT_FORCE_VERMAGIC: ignore kernel version magic;
- * KMOD_INSERT_FORCE_MODVERSION: ignore symbol version hashes.
- * @options: module's options to pass to Linux Kernel.
- *
- * Insert a module in Linux kernel. It opens the file pointed by @mod,
- * mmap'ing it and passing to kernel.
- *
- * Returns: 0 on success or < 0 on failure. If module is already loaded it
- * returns -EEXIST.
- */
-KMOD_EXPORT int kmod_module_insert_module(struct kmod_module *mod,
-							unsigned int flags,
-							const char *options)
+static int do_finit_module(struct kmod_module *mod, unsigned int flags,
+			   const char *args)
 {
+	enum kmod_file_compression_type compression, kernel_compression;
+	unsigned int kernel_flags = 0;
 	int err;
+
+	/*
+	 * When module is not compressed or its compression type matches the
+	 * one in use by the kernel, there is no need to read the file
+	 * in userspace. Otherwise, re-use ENOSYS to trigger the same fallback
+	 * as when finit_module() is not supported.
+	 */
+	compression = kmod_file_get_compression(mod->file);
+	kernel_compression = kmod_get_kernel_compression(mod->ctx);
+	if (!(compression == KMOD_FILE_COMPRESSION_NONE ||
+	      compression == kernel_compression))
+		return -ENOSYS;
+
+	if (compression != KMOD_FILE_COMPRESSION_NONE)
+		kernel_flags |= MODULE_INIT_COMPRESSED_FILE;
+
+	if (flags & KMOD_INSERT_FORCE_VERMAGIC)
+		kernel_flags |= MODULE_INIT_IGNORE_VERMAGIC;
+	if (flags & KMOD_INSERT_FORCE_MODVERSION)
+		kernel_flags |= MODULE_INIT_IGNORE_MODVERSIONS;
+
+	err = finit_module(kmod_file_get_fd(mod->file), args, kernel_flags);
+	if (err < 0)
+		err = -errno;
+
+	return err;
+}
+
+static int do_init_module(struct kmod_module *mod, unsigned int flags,
+			  const char *args)
+{
+	struct kmod_elf *elf;
 	const void *mem;
 	off_t size;
-	struct kmod_elf *elf;
-	const char *path;
-	const char *args = options ? options : "";
+	int err;
 
-	if (mod == NULL)
-		return -ENOENT;
-
-	path = kmod_module_get_path(mod);
-	if (path == NULL) {
-		ERR(mod->ctx, "could not find module by name='%s'\n", mod->name);
-		return -ENOENT;
-	}
-
-	if (!mod->file) {
-		mod->file = kmod_file_open(mod->ctx, path);
-		if (mod->file == NULL) {
-			err = -errno;
-			return err;
-		}
-	}
-
-	if (kmod_file_get_direct(mod->file)) {
-		unsigned int kernel_flags = 0;
-
-		if (flags & KMOD_INSERT_FORCE_VERMAGIC)
-			kernel_flags |= MODULE_INIT_IGNORE_VERMAGIC;
-		if (flags & KMOD_INSERT_FORCE_MODVERSION)
-			kernel_flags |= MODULE_INIT_IGNORE_MODVERSIONS;
-
-		err = finit_module(kmod_file_get_fd(mod->file), args, kernel_flags);
-		if (err == 0 || errno != ENOSYS)
-			goto init_finished;
-	}
+	kmod_file_load_contents(mod->file);
 
 	if (flags & (KMOD_INSERT_FORCE_VERMAGIC | KMOD_INSERT_FORCE_MODVERSION)) {
 		elf = kmod_file_get_elf(mod->file);
@@ -943,11 +931,60 @@ KMOD_EXPORT int kmod_module_insert_module(struct kmod_module *mod,
 	size = kmod_file_get_size(mod->file);
 
 	err = init_module(mem, size, args);
-init_finished:
-	if (err < 0) {
+	if (err < 0)
 		err = -errno;
-		INFO(mod->ctx, "Failed to insert module '%s': %m\n", path);
+
+	return err;
+}
+
+/**
+ * kmod_module_insert_module:
+ * @mod: kmod module
+ * @flags: flags are not passed to Linux Kernel, but instead they dictate the
+ * behavior of this function, valid flags are
+ * KMOD_INSERT_FORCE_VERMAGIC: ignore kernel version magic;
+ * KMOD_INSERT_FORCE_MODVERSION: ignore symbol version hashes.
+ * @options: module's options to pass to Linux Kernel.
+ *
+ * Insert a module in Linux kernel. It opens the file pointed by @mod,
+ * mmap'ing it and passing to kernel.
+ *
+ * Returns: 0 on success or < 0 on failure. If module is already loaded it
+ * returns -EEXIST.
+ */
+KMOD_EXPORT int kmod_module_insert_module(struct kmod_module *mod,
+							unsigned int flags,
+							const char *options)
+{
+	int err;
+	const char *path;
+	const char *args = options ? options : "";
+
+	if (mod == NULL)
+		return -ENOENT;
+
+	path = kmod_module_get_path(mod);
+	if (path == NULL) {
+		ERR(mod->ctx, "could not find module by name='%s'\n", mod->name);
+		return -ENOENT;
 	}
+
+	if (!mod->file) {
+		mod->file = kmod_file_open(mod->ctx, path);
+		if (mod->file == NULL) {
+			err = -errno;
+			return err;
+		}
+	}
+
+	err = do_finit_module(mod, flags, args);
+	if (err == -ENOSYS)
+		err = do_init_module(mod, flags, args);
+
+	if (err < 0)
+		INFO(mod->ctx, "Failed to insert module '%s': %s\n",
+		     path, strerror(-err));
+
 	return err;
 }
 
@@ -1810,6 +1847,10 @@ KMOD_EXPORT int kmod_module_get_initstate(const struct kmod_module *mod)
 
 	pathlen = snprintf(path, sizeof(path),
 				"/sys/module/%s/initstate", mod->name);
+	if (pathlen >= (int)sizeof(path)) {
+		/* Too long path was truncated */
+		return -ENAMETOOLONG;
+	}
 	fd = open(path, O_RDONLY|O_CLOEXEC);
 	if (fd < 0) {
 		err = -errno;
@@ -2942,47 +2983,4 @@ KMOD_EXPORT void kmod_module_dependency_symbols_free_list(struct kmod_list *list
 		kmod_module_dependency_symbol_free(list->data);
 		list = kmod_list_remove(list);
 	}
-}
-
-/**
- * kmod_module_get_builtin:
- * @ctx: kmod library context
- * @list: where to save the builtin module list
- *
- * Returns: 0 on success or < 0 otherwise.
- */
-int kmod_module_get_builtin(struct kmod_ctx *ctx, struct kmod_list **list)
-{
-	struct kmod_builtin_iter *iter;
-	int err = 0;
-
-	iter = kmod_builtin_iter_new(ctx);
-	if (!iter)
-		return -errno;
-
-	while (kmod_builtin_iter_next(iter)) {
-		struct kmod_module *mod = NULL;
-		char modname[PATH_MAX];
-
-		if (!kmod_builtin_iter_get_modname(iter, modname)) {
-			err = -errno;
-			goto fail;
-		}
-
-		err = kmod_module_new_from_name(ctx, modname, &mod);
-		if (err < 0)
-			goto fail;
-
-		kmod_module_set_builtin(mod, true);
-
-		*list = kmod_list_append(*list, mod);
-	}
-
-	kmod_builtin_iter_free(iter);
-	return err;
-fail:
-	kmod_builtin_iter_free(iter);
-	kmod_module_unref_list(*list);
-	*list = NULL;
-	return err;
 }
