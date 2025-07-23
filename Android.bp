@@ -109,4 +109,9 @@ cc_binary_host {
         "tools/lsmod.c",
     ],
     static_libs: ["libkmod"],
+    dist: {
+        targets: [
+            "dist_files",
+        ],
+    },
 }
