@@ -60,8 +60,6 @@ HOST_FLAGS := \
 	-DDISTCONFDIR=\"/lib\" \
 	-UNDEBUG \
 
-HOST_STATIC_LINK := true
-
 HOST_LIBS := c++
 
 include make/host_tool.mk
